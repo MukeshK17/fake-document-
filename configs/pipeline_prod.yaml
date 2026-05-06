@@ -1,0 +1,115 @@
+# fake-doc-detector | Production Pipeline Config
+
+# This file contains all model paths, device settings,
+# risk thresholds, and ensemble weights used in the pipeline.
+# Keeping them here helps avoid hardcoded values in the code.
+
+# Different environment settings can be stored in separate files
+# like configs/pipeline_<env>.yaml and loaded during runtime.
+
+
+# Pipeline information
+pipeline:
+  name: "FakeDocDetector"
+  version: "1.0.0"
+  environment: "production"          # current running environment (e.g. development, staging, production)
+  log_level: "INFO"                  # logging level for the pipeline (e.g. DEBUG, INFO, WARNING, ERROR)
+
+
+# Device & runtime
+runtime:
+  device: "auto"                     # (auto, cpu, cuda, cuda:0, mps)
+  # "auto" resolves to the first available CUDA device, then MPS, then CPU.
+  mixed_precision: true              # Use torch.autocast where supported
+  num_workers: 4                     # DataLoader workers for parallel processing(adjusted based on CPU cores)
+  seed: 42
+
+
+# LayoutLMv3 — Document Classification & KIE
+layoutlmv3:
+  # Pretrained model name or path to the saved model folder.
+  # Can replace this with a local checkpoint path after fine-tuning.
+  pretrained_model_name_or_path: "microsoft/layoutlmv3-base"
+
+  # Label mapping — must match the id2label dict used during fine-tuning.
+  # Index order must align with the model's classifier head.
+  id2label:
+    0: "PAN_CARD"
+    1: "AADHAR_CARD"
+    2: "BANK_STATEMENT"
+    3: "SALARY_SLIP"
+    4: "ITR_FORM"
+    5: "UNKNOWN"
+
+  # Processor / tokenizer settings
+  processor:
+    apply_ocr: false          # Pre-extracted words & boxes from PaddleOCR
+    max_seq_length: 512
+    padding: "max_length"
+    truncation: true
+
+  # Inference settings
+  inference:
+    batch_size: 1             # Single-document inference in the async pipeline
+    image_size: [224, 224]    # [H, W] expected by the LayoutLMv3 image encoder
+
+
+# Risk Thresholds:
+# Each threshold is the MINIMUM confidence score required before a document
+# is accepted as genuine.  Scores below the threshold escalate to the next
+# review tier.
+risk_thresholds:
+  auto_approve: 0.92          # >= this → automatic approval, no human review
+  manual_review: 0.70         # >= this and < auto_approve → queue for analyst
+  auto_reject: 0.50           # < manual_review → automatic rejection / flag
+  # Documents with confidence exactly equal to a boundary use the stricter tier.
+
+
+# Ensemble Confidence Weights
+
+# The final risk score is a weighted average of signals from each module.
+# Weights must sum to 1.0.  Adjust after calibration on your validation set.
+ensemble_weights:
+  layoutlmv3_classification: 0.35   # Document type + KIE confidence
+  cnn_tampering_detection:   0.40   # Pixel-level forgery score
+  regex_rules_engine:        0.25   # Semantic / mathematical validation
+
+
+# CNN Tampering Detector (placeholder — populated when module is ready)
+
+cnn_tampering:
+  pretrained_model_name_or_path: null   # e.g. "./checkpoints/ela-resnet50"
+  input_size: [256, 256]
+  ela_quality: 90                        # JPEG quality for Error Level Analysis
+
+
+# OCR — PaddleOCR (placeholder — populated when module is ready)
+
+paddleocr:
+  lang: "en"
+  use_angle_cls: true
+  use_gpu: true                  # Mirrors runtime.device; resolved at startup
+  det_db_thresh: 0.3
+  rec_batch_num: 6
+
+
+# Validators — Regex / Mathematical Rules Engine
+
+validators:
+  pan_card:
+    pan_regex: "^[A-Z]{5}[0-9]{4}[A-Z]{1}$"
+    name_min_length: 3
+  aadhar_card:
+    digit_count: 12
+    checksum_algorithm: "verhoeff"   # Verhoeff algorithm for Aadhaar UID
+  bank_statement:
+    balance_tolerance_inr: 1.0      # Allowable rounding error in closing balance
+    date_format: "%d/%m/%Y"
+
+
+# Output / Audit
+
+output:
+  results_dir: "./results"
+  save_annotated_images: false    # Flip to true during debugging
+  audit_log_path: "./logs/audit.jsonl"
