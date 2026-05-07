@@ -10,3 +10,6 @@ __pycache__/
 
 # IDEs
 .vscode/
+
+# Not ignored files
+!src/data/
