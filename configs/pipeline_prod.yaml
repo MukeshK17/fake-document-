@@ -200,3 +200,49 @@ output:
   results_dir: "./results"
   save_annotated_images: false    # Flip to true during debugging
   audit_log_path: "./logs/audit.jsonl"
+
+# Smoke Test
+
+smoke_test:
+  synthetic_doc:
+    image_size: [224, 224]
+    background_color: [255, 255, 255]
+    text_color: [20, 20, 20]
+    border_color: [150, 150, 150]
+
+    doc_types:
+      - "AADHAR_CARD"
+      - "PAN_CARD"
+ 
+  preprocessing_overrides:
+    target_size: [224, 224]
+    correct_orientation: false
+    denoise: false
+ 
+  stages:
+    ingest: true
+    preprocess_clean: true
+    preprocess_augment: true
+    ocr: true
+    classifier: true
+    rules_engine: true
+    ensemble: true
+    output_writers: true
+    dataloader: true
+ 
+  mocks:
+    classifier:
+      mock: true
+      fake_label: "AADHAR_CARD"
+      fake_label_id: 1
+      fake_confidence: 0.94
+    ocr:
+      mock: true
+
+  assertions:
+    min_ocr_tokens: 1
+    min_rules_score: 0.0
+    verdict_must_be_set: true
+    csv_row_written: true
+    audit_line_written: true
+    max_elapsed_ms: 30000
