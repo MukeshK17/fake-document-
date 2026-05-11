@@ -4,16 +4,19 @@ import hashlib
 import io
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from PIL import Image
+
+# Disable the experimental Paddle IR compiler to fix the OneDNN C++ bug
+os.environ["FLAGS_enable_pir_api"] = "0"
 
 logger = logging.getLogger(__name__)
 
-BoundingBox = list[int]                      # [x_min, y_min, x_max, y_max] in [0, 1000]
-_Polygon    = list[list[float]]              # 4 corner points from PaddleOCR
+BoundingBox = list[int]       # [x_min, y_min, x_max, y_max] in [0, 1000]
+_Polygon    = list[list[float]]   # 4 corner points from PaddleOCR
 
 
 class PaddleOCRExtractor:
@@ -21,15 +24,11 @@ class PaddleOCRExtractor:
 
     def __init__(self, config: dict[str, Any]) -> None:
         cfg = config.get("paddleocr", {})
-        rt  = config.get("runtime",   {})
 
         self._lang          = str(cfg.get("lang",          "en"))
         self._use_angle_cls = bool(cfg.get("use_angle_cls", True))
-        self._det_db_thresh = float(cfg.get("det_db_thresh", 0.3))
-        self._rec_batch_num = int(cfg.get("rec_batch_num",  6))
-
-        device = str(rt.get("device", "auto"))
-        self._use_gpu = bool(cfg.get("use_gpu", device not in ("cpu", "auto")))
+        # use_gpu / det_db_thresh / rec_batch_num removed in PaddleOCR >= 2.8
+        # GPU is now auto-detected by PaddlePaddle at runtime
 
         raw_cache = cfg.get("cache_dir")
         self._cache_dir: Path | None = Path(raw_cache) if raw_cache else None
@@ -37,8 +36,8 @@ class PaddleOCRExtractor:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._ocr: Any = None
-        logger.info("PaddleOCRExtractor | lang=%s | gpu=%s | cache=%s",
-                    self._lang, self._use_gpu, self._cache_dir)
+        logger.info("PaddleOCRExtractor | lang=%s | cache=%s",
+                    self._lang, self._cache_dir)
 
     @property
     def is_loaded(self) -> bool:
@@ -49,14 +48,17 @@ class PaddleOCRExtractor:
             from paddleocr import PaddleOCR  # type: ignore[import]
         except ImportError as exc:
             raise ImportError("pip install paddleocr paddlepaddle") from exc
-        logger.info("Loading PaddleOCR (lang=%s, gpu=%s)…", self._lang, self._use_gpu)
-        self._ocr = PaddleOCR(use_angle_cls=self._use_angle_cls, lang=self._lang,
-                              use_gpu=self._use_gpu, det_db_thresh=self._det_db_thresh,
-                              rec_batch_num=self._rec_batch_num, show_log=False)
+
+        logger.info("Loading PaddleOCR (lang=%s)…", self._lang)
+        self._ocr = PaddleOCR(
+            use_angle_cls=self._use_angle_cls,
+            lang=self._lang,
+            # show_log=False,
+            det_db_thresh=0.3
+        )
         logger.info("PaddleOCR loaded.")
 
     def extract(self, image: Image.Image) -> dict[str, list]:
-
         if not self.is_loaded:
             raise RuntimeError("Call load() before extract().")
         if not isinstance(image, Image.Image):
@@ -70,12 +72,13 @@ class PaddleOCRExtractor:
                 logger.debug("OCR cache hit.")
                 return cached
 
+        import numpy as np
         img_w, img_h = image.size
         words, boxes, scores = [], [], []
 
-        raw = self._ocr.ocr(np.array(image), cls=self._use_angle_cls)
+        raw = self._ocr.ocr(np.array(image))
         if raw and raw[0] is not None:
-            for polygon, (text, score) in ((l[0], l[1]) for l in raw[0]):
+            for polygon, (text, score) in ((line[0], line[1]) for line in raw[0]):
                 if not text.strip() or score < 0.5:
                     continue
                 words.append(text)
@@ -92,7 +95,6 @@ class PaddleOCRExtractor:
     def extract_batch(self, images: list[Image.Image]) -> list[dict[str, list]]:
         return [self.extract(img) for img in images]
 
-
     # Private helpers
 
     @staticmethod
@@ -102,7 +104,6 @@ class PaddleOCRExtractor:
         y_min = max(0,    int(round(min(ys) / img_h * 1000)))
         x_max = min(1000, int(round(max(xs) / img_w * 1000)))
         y_max = min(1000, int(round(max(ys) / img_h * 1000)))
-        # Clamp degenerate boxes
         x_max = max(x_max, x_min + 1)
         y_max = max(y_max, y_min + 1)
         return [x_min, y_min, min(x_max, 1000), min(y_max, 1000)]
