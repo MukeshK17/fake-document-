@@ -16,6 +16,7 @@ SUPPORTED_EXTS: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".tiff", ".
 FOLDER_TO_LABEL: dict[str, str] = {
     "pan_card":       "PAN_CARD",
     "aadhar_card":    "AADHAR_CARD",
+    "fake_pan_card":  "FAKE_PAN",
     "bank_statement": "BANK_STATEMENT",
     "salary_slip":    "SALARY_SLIP",
     "itr_form":       "ITR_FORM",
