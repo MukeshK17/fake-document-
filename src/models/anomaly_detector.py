@@ -90,7 +90,7 @@ def train(splits_dir: Path, raw_dirs: dict):
     X, labels, doc_ids = load_features(splits_dir, raw_dirs)
 
     # Train only on real documents
-    real_mask = np.array([l == "PAN_CARD" for l in labels])
+    real_mask = np.array([label == "PAN_CARD" for label in labels])
     X_real = X[real_mask]
     print(f"\nTraining on {len(X_real)} real documents")
 
