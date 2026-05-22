@@ -1,19 +1,16 @@
 [tool.ruff]
-# Set the maximum line length to 88 (Standard Black formatting for Python)
 line-length = 88
 
 [tool.ruff.lint]
-# Enable Pyflakes (F), pycodestyle (E, W), and isort (I)
-# F: Catches logical errors (e.g., unused imports, undefined names)
-# E/W: Catches stylistic errors
-# I: Automatically sorts and groups your imports alphabetically
 select = ["F", "E", "W", "I"]
-
-# Ignore lines that are too long (let the formatter handle it natively)
+# E501: Ignore long lines
+# F841: Ignore unused local variables (Add this if you want it globally disabled)
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"tools/*" = ["F841"]
+"tests/*" = ["F841"]
+
 [tool.ruff.format]
-# Use double quotes for strings (Standard Python convention)
 quote-style = "double"
-# Indent with 4 spaces
 indent-style = "space"
