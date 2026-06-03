@@ -15,17 +15,15 @@ os.environ["FLAGS_enable_pir_api"] = "0"
 
 logger = logging.getLogger(__name__)
 
-BoundingBox = list[int]       # [x_min, y_min, x_max, y_max] in [0, 1000]
-_Polygon    = list[list[float]]   # 4 corner points from PaddleOCR
+BoundingBox = list[int]  # [x_min, y_min, x_max, y_max] in [0, 1000]
+_Polygon = list[list[float]]  # 4 corner points from PaddleOCR
 
 
 class PaddleOCRExtractor:
-
-
     def __init__(self, config: dict[str, Any]) -> None:
         cfg = config.get("paddleocr", {})
 
-        self._lang          = str(cfg.get("lang",          "en"))
+        self._lang = str(cfg.get("lang", "en"))
         self._use_angle_cls = bool(cfg.get("use_angle_cls", True))
         # use_gpu / det_db_thresh / rec_batch_num removed in PaddleOCR >= 2.8
         # GPU is now auto-detected by PaddlePaddle at runtime
@@ -36,8 +34,9 @@ class PaddleOCRExtractor:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
 
         self._ocr: Any = None
-        logger.info("PaddleOCRExtractor | lang=%s | cache=%s",
-                    self._lang, self._cache_dir)
+        logger.info(
+            "PaddleOCRExtractor | lang=%s | cache=%s", self._lang, self._cache_dir
+        )
 
     @property
     def is_loaded(self) -> bool:
@@ -54,7 +53,7 @@ class PaddleOCRExtractor:
             use_angle_cls=self._use_angle_cls,
             lang=self._lang,
             # show_log=False,
-            det_db_thresh=0.3
+            det_db_thresh=0.3,
         )
         logger.info("PaddleOCR loaded.")
 
@@ -73,6 +72,7 @@ class PaddleOCRExtractor:
                 return cached
 
         import numpy as np
+
         img_w, img_h = image.size
         words, boxes, scores = [], [], []
 
@@ -100,8 +100,8 @@ class PaddleOCRExtractor:
     @staticmethod
     def _norm_box(polygon: _Polygon, img_w: int, img_h: int) -> BoundingBox:
         xs, ys = [p[0] for p in polygon], [p[1] for p in polygon]
-        x_min = max(0,    int(round(min(xs) / img_w * 1000)))
-        y_min = max(0,    int(round(min(ys) / img_h * 1000)))
+        x_min = max(0, int(round(min(xs) / img_w * 1000)))
+        y_min = max(0, int(round(min(ys) / img_h * 1000)))
         x_max = min(1000, int(round(max(xs) / img_w * 1000)))
         y_max = min(1000, int(round(max(ys) / img_h * 1000)))
         x_max = max(x_max, x_min + 1)
