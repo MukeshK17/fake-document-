@@ -38,7 +38,14 @@ logging.basicConfig(
     level=logging.WARNING,
 )
 
-G, R, Y, B, BOLD, RST = "\033[92m", "\033[91m", "\033[93m", "\033[96m", "\033[1m", "\033[0m"
+G, R, Y, B, BOLD, RST = (
+    "\033[92m",
+    "\033[91m",
+    "\033[93m",
+    "\033[96m",
+    "\033[1m",
+    "\033[0m",
+)
 
 
 def load_existing_cache(cache_path: Path) -> dict[str, dict]:
@@ -78,7 +85,7 @@ def build_cache_for_split(
     from src.extractors.paddleOcr_extractor import PaddleOCRExtractor
 
     manifest_path = splits_dir / f"{split}.csv"
-    cache_path    = splits_dir / f"{split}_ocr_cache.jsonl"
+    cache_path = splits_dir / f"{split}_ocr_cache.jsonl"
 
     rows = read_manifest(manifest_path)
     if not rows:
@@ -86,7 +93,7 @@ def build_cache_for_split(
 
     existing = {} if overwrite else load_existing_cache(cache_path)
     to_process = [r for r in rows if r["doc_id"] not in existing]
-    skipped    = len(rows) - len(to_process)
+    skipped = len(rows) - len(to_process)
 
     print(f"\n  {BOLD}Split: {split}{RST}")
     print(f"  manifest  : {manifest_path}  ({len(rows)} rows)")
@@ -94,7 +101,9 @@ def build_cache_for_split(
     print(f"  to process: {len(to_process)}  |  already cached: {skipped}")
 
     if dry_run:
-        print(f"  {B}[dry-run]{RST}  would process {len(to_process)} images — writing nothing")
+        print(
+            f"  {B}[dry-run]{RST}  would process {len(to_process)} images — writing nothing"
+        )
         return 0, skipped, 0
 
     if not to_process:
@@ -104,16 +113,16 @@ def build_cache_for_split(
     # Initialise pipeline modules
     # Use preprocessing_overrides from smoke_test section for speed if available,
     # otherwise use production config as-is
-    ingester     = DocumentIngester(cfg)
+    ingester = DocumentIngester(cfg)
     preprocessor = DocumentPreprocessor(cfg)
-    extractor    = PaddleOCRExtractor(cfg)
+    extractor = PaddleOCRExtractor(cfg)
 
     print("  loading PaddleOCR…", end=" ", flush=True)
     extractor.load()
     print(f"{G}ready{RST}\n")
 
     processed = failed = 0
-    t_start   = time.perf_counter()
+    t_start = time.perf_counter()
 
     with cache_path.open("a", encoding="utf-8") as out_fh:
         # write any existing entries back first if overwrite=True
@@ -122,31 +131,32 @@ def build_cache_for_split(
                 out_fh.write(json.dumps(entry) + "\n")
 
         for i, row in enumerate(to_process, 1):
-            doc_id    = row["doc_id"]
+            doc_id = row["doc_id"]
             file_path = ROOT / row["file_path"]
-            elapsed   = time.perf_counter() - t_start
-            eta       = (elapsed / i) * (len(to_process) - i) if i > 1 else 0
+            elapsed = time.perf_counter() - t_start
+            eta = (elapsed / i) * (len(to_process) - i) if i > 1 else 0
 
             print(
                 f"  [{i:>4}/{len(to_process)}]  {doc_id:<20}"
                 f"  elapsed={elapsed:.0f}s  eta={eta:.0f}s",
-                end="  ", flush=True,
+                end="  ",
+                flush=True,
             )
 
             try:
-                pages  = ingester.load(file_path)
+                pages = ingester.load(file_path)
                 # No augmentation for OCR cache — want clean deterministic tokens
-                image  = preprocessor.process(pages[0], augment=False)
+                image = preprocessor.process(pages[0], augment=False)
                 result = extractor.extract(image)
 
                 entry = {
                     "doc_id": doc_id,
-                    "words":  result["words"],
-                    "boxes":  result["boxes"],
+                    "words": result["words"],
+                    "boxes": result["boxes"],
                     "scores": result["scores"],
                 }
                 out_fh.write(json.dumps(entry) + "\n")
-                out_fh.flush()   # flush every line — safe to interrupt mid-run
+                out_fh.flush()  # flush every line — safe to interrupt mid-run
 
                 print(f"{G}✓{RST}  {len(result['words'])} tokens")
                 processed += 1
@@ -162,14 +172,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build PaddleOCR cache for train/val/test manifests"
     )
-    parser.add_argument("--config",     default="configs/pipeline_prod.yaml")
+    parser.add_argument("--config", default="configs/pipeline_prod.yaml")
     parser.add_argument("--splits-dir", default=str(ROOT / "data" / "splits"))
-    parser.add_argument("--split",      choices=["train", "val", "test", "all"],
-                        default="all", help="Which split to process  (default: all)")
-    parser.add_argument("--overwrite",  action="store_true",
-                        help="Re-process and overwrite already-cached entries")
-    parser.add_argument("--dry-run",    action="store_true",
-                        help="Validate manifests and images without writing anything")
+    parser.add_argument(
+        "--split",
+        choices=["train", "val", "test", "all"],
+        default="all",
+        help="Which split to process  (default: all)",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Re-process and overwrite already-cached entries",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate manifests and images without writing anything",
+    )
     args = parser.parse_args()
 
     config_path = ROOT / args.config
@@ -182,10 +202,10 @@ def main() -> None:
     # Disable slow preprocessing stages for cache building speed
     # (same images, but we don't need perfect quality for cache — OCR is fast enough)
     cfg["preprocessing"]["correct_orientation"] = False
-    cfg["preprocessing"]["denoise"]             = False
+    cfg["preprocessing"]["denoise"] = False
 
     splits_dir = Path(args.splits_dir)
-    splits     = ["train", "val", "test"] if args.split == "all" else [args.split]
+    splits = ["train", "val", "test"] if args.split == "all" else [args.split]
 
     print(f"\n{BOLD}{B}build_ocr_cache.py{RST}\n")
     print(f"  config     : {config_path}")
@@ -207,8 +227,8 @@ def main() -> None:
             split, splits_dir, cfg, args.overwrite, args.dry_run
         )
         total_processed += p
-        total_skipped   += s
-        total_failed    += f
+        total_skipped += s
+        total_failed += f
 
     print(f"\n{BOLD}  Final summary{RST}")
     print(f"  processed : {total_processed}")
