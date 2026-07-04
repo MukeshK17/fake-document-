@@ -1,13 +1,3 @@
-# fake-doc-detector | Production Pipeline Config
-
-# This file contains all model paths, device settings,
-# risk thresholds, and ensemble weights used in the pipeline.
-# Keeping them here helps avoid hardcoded values in the code.
-
-# Different environment settings can be stored in separate files
-# like configs/pipeline_<env>.yaml and loaded during runtime.
-
-
 # Pipeline information
 pipeline:
   name: "FakeDocDetector"
@@ -93,6 +83,7 @@ ingestion:
 paddleocr:
   lang: "en"
   use_angle_cls: true
+  min_score: 0.35
   use_gpu: true                  # Mirrors runtime.device; resolved at startup
   det_db_thresh: 0.3
   rec_batch_num: 6
@@ -172,6 +163,16 @@ preprocessing:
       max_w_ratio: 0.20       # max patch width as fraction of image width
 
 
+# PatchCore Anomaly Detector
+patchcore:
+  backbone: "wide_resnet50_2"
+  img_size: 320
+  extract_layers: ["layer2", "layer3"]
+  coreset_ratio: 0.10
+  k_neighbours: 9
+  bank_path: "data/patchcore_bank.pt"
+  score_threshold: 0.55
+ 
 # DataLoaders
 
 dataloader:
@@ -246,3 +247,10 @@ smoke_test:
     csv_row_written: true
     audit_line_written: true
     max_elapsed_ms: 30000
+
+# Ensemble Weights (updated)
+ensemble_weights:
+  patchcore_anomaly: 0.55
+  regex_rules_engine: 0.45
+
+ 
