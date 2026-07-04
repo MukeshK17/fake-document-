@@ -17,17 +17,21 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_SUFFIXES: frozenset[str] = frozenset({".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"})
+_IMAGE_SUFFIXES: frozenset[str] = frozenset(
+    {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
+)
 
 
 class DocumentIngester:
-
     def __init__(self, config: dict[str, Any]) -> None:
         cfg = config.get("ingestion", {})
-        self._pdf_dpi:   int       = int(cfg.get("pdf_dpi",   200))
+        self._pdf_dpi: int = int(cfg.get("pdf_dpi", 200))
         self._max_pages: int | None = cfg.get("max_pages", None)
-        logger.info("DocumentIngester ready | pdf_dpi=%d | max_pages=%s",
-                    self._pdf_dpi, self._max_pages)
+        logger.info(
+            "DocumentIngester ready | pdf_dpi=%d | max_pages=%s",
+            self._pdf_dpi,
+            self._max_pages,
+        )
 
     def load(self, source: str | Path) -> list[Image.Image]:
         """Return one RGB PIL image per page from a local path or S3 URI."""
@@ -42,8 +46,10 @@ class DocumentIngester:
         if path.suffix.lower() in _IMAGE_SUFFIXES:
             logger.debug("Loading image: %s", path)
             return [Image.open(path).convert("RGB")]
-        raise ValueError(f"Unsupported type '{path.suffix}'. "
-                         f"Supported: PDF + {sorted(_IMAGE_SUFFIXES)}")
+        raise ValueError(
+            f"Unsupported type '{path.suffix}'. "
+            f"Supported: PDF + {sorted(_IMAGE_SUFFIXES)}"
+        )
 
     def _from_pdf(self, path: Path) -> list[Image.Image]:
         try:
@@ -51,7 +57,9 @@ class DocumentIngester:
         except ImportError as exc:
             raise ImportError("Install pdf2image: pip install pdf2image") from exc
         logger.debug("Rasterising PDF at %d DPI: %s", self._pdf_dpi, path)
-        pages = convert_from_path(str(path), dpi=self._pdf_dpi, last_page=self._max_pages)
+        pages = convert_from_path(
+            str(path), dpi=self._pdf_dpi, last_page=self._max_pages
+        )
         pages = [p.convert("RGB") for p in pages]
         logger.info("Loaded %d page(s) from PDF: %s", len(pages), path.name)
         return pages
