@@ -1,5 +1,6 @@
 [tool.ruff]
 line-length = 88
+extend-exclude = ["archive", "colab/*.ipynb"]
 
 [tool.ruff.lint]
 select = ["F", "E", "W", "I"]
