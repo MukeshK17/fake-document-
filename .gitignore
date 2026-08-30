@@ -13,3 +13,12 @@ __pycache__/
 
 # Not ignored files
 !src/data/
+
+aadhar_card
+colab
+outputs
+reports
+tests
+tools/crop_cards.py
+tools/
+staging_yolo_dataset

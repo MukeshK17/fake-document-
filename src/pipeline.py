@@ -21,19 +21,21 @@ logger = logging.getLogger(__name__)
 
 class DocumentVerificationPipeline:
     def __init__(self, config: dict[str, Any]) -> None:
-        self._cfg            = config
-        self._thresholds     = config["risk_thresholds"]
-        self._weights        = config["ensemble_weights"]
-        self._output_cfg     = config.get("output", {})
+        self._cfg = config
+        self._thresholds = config["risk_thresholds"]
+        self._weights = config["ensemble_weights"]
+        self._output_cfg = config.get("output", {})
 
-        self._ingester       = DocumentIngester(config)
-        self._preprocessor   = DocumentPreprocessor(config)
-        self._ocr            = PaddleOCRExtractor(config)
-        self._classifier     = LayoutLMv3Classifier(config)
-        self._rules          = RulesEngine(config)
+        self._ingester = DocumentIngester(config)
+        self._preprocessor = DocumentPreprocessor(config)
+        self._ocr = PaddleOCRExtractor(config)
+        self._classifier = LayoutLMv3Classifier(config)
+        self._rules = RulesEngine(config)
 
-        self._audit_path     = Path(self._output_cfg.get("audit_log_path", "logs/audit.jsonl"))
-        self._results_path   = Path(self._output_cfg.get("results_dir", "results"))
+        self._audit_path = Path(
+            self._output_cfg.get("audit_log_path", "logs/audit.jsonl")
+        )
+        self._results_path = Path(self._output_cfg.get("results_dir", "results"))
 
         self._audit_path.parent.mkdir(parents=True, exist_ok=True)
         self._results_path.mkdir(parents=True, exist_ok=True)
@@ -48,24 +50,24 @@ class DocumentVerificationPipeline:
         logger.info("Pipeline ready.")
 
     def run(self, file_path: str | Path, doc_id: str | None = None) -> dict[str, Any]:
-        doc_id    = doc_id or str(uuid.uuid4())[:8]
+        doc_id = doc_id or str(uuid.uuid4())[:8]
         file_path = str(file_path)
-        started   = time.perf_counter()
+        started = time.perf_counter()
 
         result: dict[str, Any] = {
-            "doc_id":          doc_id,
-            "file_path":       file_path,
-            "document_type":   "UNKNOWN",
+            "doc_id": doc_id,
+            "file_path": file_path,
+            "document_type": "UNKNOWN",
             "type_confidence": 0.0,
-            "layout_score":    0.0,
-            "rules_score":     0.0,
-            "risk_score":      0.0,
-            "verdict":         "REJECTED",
-            "is_fake":         True,
-            "rules_detail":    {},
-            "ocr_word_count":  0,
+            "layout_score": 0.0,
+            "rules_score": 0.0,
+            "risk_score": 0.0,
+            "verdict": "REJECTED",
+            "is_fake": True,
+            "rules_detail": {},
+            "ocr_word_count": 0,
             "pages_processed": 0,
-            "error":           None,
+            "error": None,
         }
 
         try:
@@ -75,16 +77,19 @@ class DocumentVerificationPipeline:
             result["error"] = str(exc)
 
         result["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
-        result["timestamp"]  = datetime.now(timezone.utc).isoformat()
+        result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
         self._write_audit(result)
         self._write_csv_row(result)
 
         logger.info(
             "[%s] %-16s | type=%-16s conf=%.2f | risk=%.2f | %s",
-            doc_id, Path(file_path).name,
-            result["document_type"], result["type_confidence"],
-            result["risk_score"], result["verdict"],
+            doc_id,
+            Path(file_path).name,
+            result["document_type"],
+            result["type_confidence"],
+            result["risk_score"],
+            result["verdict"],
         )
         return result
 
@@ -92,9 +97,7 @@ class DocumentVerificationPipeline:
         """Run :meth:`run` on a list of files and return all results."""
         return [self.run(fp) for fp in file_paths]
 
-
     # Pipeline stages
-
 
     def _run_stages(
         self, result: dict[str, Any], file_path: str, doc_id: str
@@ -117,9 +120,9 @@ class DocumentVerificationPipeline:
             words=ocr["words"],
             boxes=ocr["boxes"],
         )
-        result["document_type"]   = clf["label"]
+        result["document_type"] = clf["label"]
         result["type_confidence"] = clf["confidence"]
-        result["layout_score"]    = clf["confidence"]
+        result["layout_score"] = clf["confidence"]
 
         # Stage 5: Rules validation
         rules_result = self._rules.validate(
@@ -127,13 +130,13 @@ class DocumentVerificationPipeline:
             words=ocr["words"],
             boxes=ocr["boxes"],
         )
-        result["rules_score"]  = rules_result["score"]
+        result["rules_score"] = rules_result["score"]
         result["rules_detail"] = rules_result["detail"]
 
         # Stage 6: Ensemble + verdict
         result["risk_score"] = self._ensemble(
             layout_score=result["layout_score"],
-            cnn_score=1.0,              # neutral until cnn_tampering.py is built
+            cnn_score=1.0,  # neutral until cnn_tampering.py is built
             rules_score=result["rules_score"],
         )
         result["verdict"] = self._verdict(result["risk_score"])
@@ -147,7 +150,7 @@ class DocumentVerificationPipeline:
         w = self._weights
         raw = (
             layout_score * w["layoutlmv3_classification"]
-            + cnn_score  * w["cnn_tampering_detection"]
+            + cnn_score * w["cnn_tampering_detection"]
             + rules_score * w["regex_rules_engine"]
         )
         return round(raw, 4)
@@ -168,10 +171,19 @@ class DocumentVerificationPipeline:
         csv_path = self._results_path / "results.csv"
         write_header = not csv_path.exists()
         fields = [
-            "timestamp", "doc_id", "file_path", "document_type",
-            "type_confidence", "risk_score", "verdict", "is_fake",
-            "rules_score", "ocr_word_count", "pages_processed",
-            "elapsed_ms", "error",
+            "timestamp",
+            "doc_id",
+            "file_path",
+            "document_type",
+            "type_confidence",
+            "risk_score",
+            "verdict",
+            "is_fake",
+            "rules_score",
+            "ocr_word_count",
+            "pages_processed",
+            "elapsed_ms",
+            "error",
         ]
         with csv_path.open("a", encoding="utf-8", newline="") as fh:
             if write_header:

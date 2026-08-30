@@ -23,6 +23,7 @@ import argparse
 import csv
 import json
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,8 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+OCR_CROPS_ROOT = ROOT / "data" / "ocr_crops"
+OCR_CROPS_METADATA = OCR_CROPS_ROOT / "crops_metadata.csv"
 sys.path.insert(0, str(ROOT))
 
 logging.basicConfig(
@@ -70,15 +73,46 @@ def read_manifest(manifest_path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
+def get_crop_root(label: str) -> Path:
+    """Map manifest labels into real/fake crop directories."""
+    return OCR_CROPS_ROOT / ("fake" if "FAKE" in label.upper() else "real")
+
+
+def box_to_pixels(box: list[int], img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    """Convert 0-1000 normalized box coordinates to pixel coordinates."""
+    x_min = int(round(box[0] / 1000 * img_w))
+    y_min = int(round(box[1] / 1000 * img_h))
+    x_max = int(round(box[2] / 1000 * img_w))
+    y_max = int(round(box[3] / 1000 * img_h))
+    return x_min, y_min, x_max, y_max
+
+
+def clamp_box(x_min: int, y_min: int, x_max: int, y_max: int, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    return (
+        max(0, min(x_min, img_w - 1)),
+        max(0, min(y_min, img_h - 1)),
+        max(1, min(x_max, img_w)),
+        max(1, min(y_max, img_h)),
+    )
+
+
+def expand_box(x_min: int, y_min: int, x_max: int, y_max: int, pad_fraction: float, img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    width = x_max - x_min
+    height = y_max - y_min
+    pad_x = int(round(width * pad_fraction))
+    pad_y = int(round(height * pad_fraction))
+    return clamp_box(x_min - pad_x, y_min - pad_y, x_max + pad_x, y_max + pad_y, img_w, img_h)
+
+
 def build_cache_for_split(
     split: str,
     splits_dir: Path,
     cfg: dict,
     overwrite: bool,
     dry_run: bool,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """
-    Process one split.  Returns (processed, skipped, failed) counts.
+    Process one split.  Returns (processed, skipped, failed, tokens, crops) counts.
     """
     from src.data.ingestion import DocumentIngester
     from src.data.preprocessing import DocumentPreprocessor
@@ -87,9 +121,12 @@ def build_cache_for_split(
     manifest_path = splits_dir / f"{split}.csv"
     cache_path = splits_dir / f"{split}_ocr_cache.jsonl"
 
+    if overwrite and cache_path.exists():
+        cache_path.unlink()
+
     rows = read_manifest(manifest_path)
     if not rows:
-        return 0, 0, 0
+        return 0, 0, 0, 0, 0
 
     existing = {} if overwrite else load_existing_cache(cache_path)
     to_process = [r for r in rows if r["doc_id"] not in existing]
@@ -104,11 +141,11 @@ def build_cache_for_split(
         print(
             f"  {B}[dry-run]{RST}  would process {len(to_process)} images — writing nothing"
         )
-        return 0, skipped, 0
+        return 0, skipped, 0, 0, 0
 
     if not to_process:
         print(f"  {G}all images already cached — nothing to do{RST}")
-        return 0, skipped, 0
+        return 0, skipped, 0, 0, 0
 
     # Initialise pipeline modules
     # Use preprocessing_overrides from smoke_test section for speed if available,
@@ -122,16 +159,38 @@ def build_cache_for_split(
     print(f"{G}ready{RST}\n")
 
     processed = failed = 0
+    tokens_extracted = crops_saved = 0
     t_start = time.perf_counter()
 
+    metadata_exists = OCR_CROPS_METADATA.exists()
     with cache_path.open("a", encoding="utf-8") as out_fh:
-        # write any existing entries back first if overwrite=True
         if overwrite and existing:
             for entry in existing.values():
                 out_fh.write(json.dumps(entry) + "\n")
 
+        if not dry_run and not metadata_exists:
+            OCR_CROPS_ROOT.mkdir(parents=True, exist_ok=True)
+            with OCR_CROPS_METADATA.open("w", newline="", encoding="utf-8") as meta_fh:
+                writer = csv.DictWriter(
+                    meta_fh,
+                    fieldnames=[
+                        "doc_id",
+                        "label",
+                        "token_index",
+                        "text",
+                        "ocr_score",
+                        "crop_path",
+                        "x_min",
+                        "y_min",
+                        "x_max",
+                        "y_max",
+                    ],
+                )
+                writer.writeheader()
+
         for i, row in enumerate(to_process, 1):
             doc_id = row["doc_id"]
+            label = row.get("label", "UNKNOWN")
             file_path = ROOT / row["file_path"]
             elapsed = time.perf_counter() - t_start
             eta = (elapsed / i) * (len(to_process) - i) if i > 1 else 0
@@ -158,14 +217,101 @@ def build_cache_for_split(
                 out_fh.write(json.dumps(entry) + "\n")
                 out_fh.flush()  # flush every line — safe to interrupt mid-run
 
-                print(f"{G}✓{RST}  {len(result['words'])} tokens")
+                token_count = len(result["words"])
+                token_count_text = f"{token_count} tokens"
+
+                if not dry_run:
+                    crop_base = get_crop_root(label) / doc_id
+                    crop_base.mkdir(parents=True, exist_ok=True)
+                    with OCR_CROPS_METADATA.open("a", newline="", encoding="utf-8") as meta_fh:
+                        writer = csv.DictWriter(
+                            meta_fh,
+                            fieldnames=[
+                                "doc_id",
+                                "label",
+                                "token_index",
+                                "text",
+                                "ocr_score",
+                                "crop_path",
+                                "x_min",
+                                "y_min",
+                                "x_max",
+                                "y_max",
+                            ],
+                        )
+                        img_w, img_h = image.size
+                        doc_crops = 0
+
+                        for token_index, (text, box, score) in enumerate(
+                            zip(result["words"], result["boxes"], result["scores"])
+                        ):
+                            if not text.strip():
+                                continue
+
+                            x_min, y_min, x_max, y_max = box_to_pixels(box, img_w, img_h)
+                            x_min, y_min, x_max, y_max = clamp_box(
+                                x_min, y_min, x_max, y_max, img_w, img_h
+                            )
+
+                            cropped_box = expand_box(
+                                x_min, y_min, x_max, y_max, 0.25, img_w, img_h
+                            )
+                            context_box = expand_box(
+                                x_min, y_min, x_max, y_max, 1.0, img_w, img_h
+                            )
+
+                            token_name = f"token_{token_index:03d}"
+                            token_path = crop_base / f"{token_name}.png"
+                            context_path = crop_base / f"{token_name}_context.png"
+
+                            image.crop(cropped_box).save(token_path, format="PNG")
+                            image.crop(context_box).save(context_path, format="PNG")
+
+                            writer.writerow(
+                                {
+                                    "doc_id": doc_id,
+                                    "label": label,
+                                    "token_index": token_index,
+                                    "text": text,
+                                    "ocr_score": score,
+                                    "crop_path": str(token_path.relative_to(ROOT)),
+                                    "x_min": cropped_box[0],
+                                    "y_min": cropped_box[1],
+                                    "x_max": cropped_box[2],
+                                    "y_max": cropped_box[3],
+                                }
+                            )
+                            writer.writerow(
+                                {
+                                    "doc_id": doc_id,
+                                    "label": label,
+                                    "token_index": token_index,
+                                    "text": text,
+                                    "ocr_score": score,
+                                    "crop_path": str(context_path.relative_to(ROOT)),
+                                    "x_min": context_box[0],
+                                    "y_min": context_box[1],
+                                    "x_max": context_box[2],
+                                    "y_max": context_box[3],
+                                }
+                            )
+                            doc_crops += 2
+                            crops_saved += 2
+
+                print(f"{G}✓{RST}  {token_count_text}  |  crops={doc_crops}")
                 processed += 1
+                tokens_extracted += token_count
 
             except Exception as exc:
                 print(f"{R}✗  {exc}{RST}")
                 failed += 1
 
-    return processed, skipped, failed
+    return processed, skipped, failed, tokens_extracted, crops_saved
+
+
+def cleanup_ocr_outputs() -> None:
+    if OCR_CROPS_ROOT.exists():
+        shutil.rmtree(OCR_CROPS_ROOT)
 
 
 def main() -> None:
@@ -221,19 +367,28 @@ def main() -> None:
         sys.exit(1)
 
     total_processed = total_skipped = total_failed = 0
+    total_tokens = total_crops = 0
+
+    if args.overwrite:
+        print(f"  {Y}overwrite enabled — deleting existing OCR outputs{RST}")
+        cleanup_ocr_outputs()
 
     for split in splits:
-        p, s, f = build_cache_for_split(
+        p, s, f, t, c = build_cache_for_split(
             split, splits_dir, cfg, args.overwrite, args.dry_run
         )
         total_processed += p
         total_skipped += s
         total_failed += f
+        total_tokens += t
+        total_crops += c
 
     print(f"\n{BOLD}  Final summary{RST}")
     print(f"  processed : {total_processed}")
     print(f"  skipped   : {total_skipped}  (already cached)")
     print(f"  failed    : {total_failed}")
+    print(f"  tokens    : {total_tokens}")
+    print(f"  crops     : {total_crops}")
 
     if total_failed > 0:
         print(f"\n  {Y}Some images failed. Check the errors above.{RST}")

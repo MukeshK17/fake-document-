@@ -12,6 +12,8 @@ from PIL import Image
 
 # Disable the experimental Paddle IR compiler to fix the OneDNN C++ bug
 os.environ["FLAGS_enable_pir_api"] = "0"
+# Disable MKLDNN fallback path that may fail with "could not execute a primitive"
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ class PaddleOCRExtractor:
 
         self._lang = str(cfg.get("lang", "en"))
         self._use_angle_cls = bool(cfg.get("use_angle_cls", True))
+        self._min_score = float(cfg.get("min_score", 0.35))
         # use_gpu / det_db_thresh / rec_batch_num removed in PaddleOCR >= 2.8
         # GPU is now auto-detected by PaddlePaddle at runtime
 
@@ -35,7 +38,10 @@ class PaddleOCRExtractor:
 
         self._ocr: Any = None
         logger.info(
-            "PaddleOCRExtractor | lang=%s | cache=%s", self._lang, self._cache_dir
+            "PaddleOCRExtractor | lang=%s | min_score=%.2f | cache=%s",
+            self._lang,
+            self._min_score,
+            self._cache_dir,
         )
 
     @property
@@ -43,6 +49,7 @@ class PaddleOCRExtractor:
         return self._ocr is not None
 
     def load(self) -> None:
+        self._ensure_numpy_compat()
         try:
             from paddleocr import PaddleOCR  # type: ignore[import]
         except ImportError as exc:
@@ -71,15 +78,13 @@ class PaddleOCRExtractor:
                 logger.debug("OCR cache hit.")
                 return cached
 
-        import numpy as np
-
         img_w, img_h = image.size
         words, boxes, scores = [], [], []
 
-        raw = self._ocr.ocr(np.array(image))
+        raw = self._run_ocr_with_fallback(image)
         if raw and raw[0] is not None:
             for polygon, (text, score) in ((line[0], line[1]) for line in raw[0]):
-                if not text.strip() or score < 0.5:
+                if not text.strip() or score < self._min_score:
                     continue
                 words.append(text)
                 boxes.append(self._norm_box(polygon, img_w, img_h))
@@ -123,3 +128,48 @@ class PaddleOCRExtractor:
 
     def _write_cache(self, image: Image.Image, result: dict[str, list]) -> None:
         self._cache_path(image).write_text(json.dumps(result), encoding="utf-8")
+
+    @staticmethod
+    def _ensure_numpy_compat() -> None:
+        """
+        PaddleOCR dependencies may access `np.sctypes`, removed in NumPy 2.0.
+        Re-create it to keep older downstream code working.
+        """
+        import numpy as np
+
+        if hasattr(np, "sctypes"):
+            return
+
+        np.sctypes = {  # type: ignore[attr-defined]
+            "int": [np.int8, np.int16, np.int32, np.int64],
+            "uint": [np.uint8, np.uint16, np.uint32, np.uint64],
+            "float": [np.float16, np.float32, np.float64],
+            "complex": [np.complex64, np.complex128],
+            "others": [np.bool_, np.object_, np.str_, np.void],
+        }
+
+    def _run_ocr_with_fallback(self, image: Image.Image):
+        import numpy as np
+
+        try:
+            return self._ocr.ocr(np.array(image, dtype=np.uint8))
+        except Exception as exc:
+            message = str(exc).lower()
+            if "primitive" not in message:
+                raise
+
+            # Some Paddle/OneDNN builds fail on large input tensors;
+            # retry once with a bounded resolution image.
+            retry_image = image.copy()
+            retry_image.thumbnail((1600, 1600), Image.Resampling.BILINEAR)
+            logger.warning(
+                "PaddleOCR primitive execution failed; retrying with resized image (%sx%s).",
+                retry_image.width,
+                retry_image.height,
+            )
+            try:
+                return self._ocr.ocr(np.array(retry_image, dtype=np.uint8))
+            except Exception as retry_exc:
+                raise RuntimeError(
+                    "PaddleOCR failed after primitive-error retry."
+                ) from retry_exc
