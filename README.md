@@ -272,7 +272,7 @@ Run the test suite:
 ``` bash
 pytest
 ```
-cle
+
 ## License
 
 MIT License. See `LICENSE`.
